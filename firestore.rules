@@ -1,0 +1,63 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+  
+    // Helper function to check for admin role
+    function isAdmin() {
+      return exists(/databases/$(database)/documents/userProfiles/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Products can be read by anyone. Writes are blocked from the client.
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if false;
+
+      // Reviews can be read by anyone, but only created by authenticated users.
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create: if request.auth != null;
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // User profiles can be created by the user themselves, and only read/updated by their owner.
+    // Admins can read any profile but not write to it.
+    match /userProfiles/{userId} {
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId && 
+                       (request.resource.data.photoURL.size() < 1048576 || !('photoURL' in request.resource.data.keys()));
+      allow get: if isAdmin();
+
+      // User can LIST their own cart items.
+      match /cartItems {
+        allow list: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // User can manage individual cart items.
+      match /cartItems/{itemId} {
+        allow read, write, delete: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // User can manage their own favorites document.
+      match /favorites/default {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    
+    // Orders collection is now at the root.
+    match /orders/{orderId} {
+      // User can create their own order.
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+      
+      // User can upload their own receipt (update), with validation on the receipt image size.
+      // User can also view their own order. Admins can read and update any order.
+      allow read: if (request.auth != null && request.auth.uid == resource.data.userId) || isAdmin();
+      allow update: if (request.auth != null && request.auth.uid == resource.data.userId && request.resource.data.receiptImageUrl.size() < 1048576) || isAdmin();
+      allow list: if isAdmin();
+    }
+  }
+}
